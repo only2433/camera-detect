@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>입 가리기 챌린지</title>
+  <link rel="stylesheet" href="style.css?v=d0b34fa8" />
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>입 가리기 챌린지</h1>
+      <p class="subtitle">카운트다운 후 찰칵! — 코·입 가리면 GOOD, 자세도 취하면 EXCELLENT</p>
+    </header>
+
+    <!-- Video stage -->
+    <div class="stage">
+
+      <!-- LEFT: Camera -->
+      <div class="video-wrapper">
+        <video id="webcam" autoplay playsinline muted></video>
+        <canvas id="overlay"></canvas>
+
+        <div class="cd-overlay" id="cd-overlay">
+          <div class="cd-ring" id="cd-ring"></div>
+          <div class="cd-number" id="cd-number"></div>
+        </div>
+
+        <div class="snap-overlay" id="snap-overlay">
+          <span class="snap-text">찰칵!</span>
+        </div>
+
+        <div class="flash-overlay" id="flash-overlay"></div>
+      </div>
+
+      <!-- RIGHT: Control panel -->
+      <div class="right-panel">
+
+        <!-- State: IDLE -->
+        <div id="state-idle" class="panel-card">
+          <div class="panel-icon">✋</div>
+          <p class="panel-title">입 가리기 챌린지</p>
+          <p class="instruction">카운트다운이 끝나는 순간<br>코와 입을 손으로 가리세요!<br><span class="instruction-sub">앉거나 허리를 숙이면 EXCELLENT!</span></p>
+          <button class="primary-btn" id="start-btn">시작하기</button>
+        </div>
+
+        <!-- State: COUNTDOWN -->
+        <div id="state-countdown" style="display:none" class="panel-card">
+          <p class="countdown-hint">손을 입 가까이 가져가세요!</p>
+        </div>
+
+        <!-- State: RESULT -->
+        <div id="state-result" style="display:none" class="panel-card">
+          <img id="snap-preview" class="snap-preview" alt="찰칵 순간" />
+          <div class="result-icon" id="result-icon"></div>
+          <div class="result-label" id="result-label"></div>
+          <div class="result-conditions">
+            <div class="cond-item" id="cond-cover">
+              <span class="cond-icon" id="cond-cover-icon"></span>
+              <span class="cond-text">코·입 가리기</span>
+            </div>
+            <div class="cond-item" id="cond-posture">
+              <span class="cond-icon" id="cond-posture-icon"></span>
+              <span class="cond-text">앉기·허리 숙이기</span>
+            </div>
+          </div>
+          <div class="result-sub" id="result-sub"></div>
+          <button class="primary-btn retry-btn" id="retry-btn">다시하기</button>
+        </div>
+
+        <!-- Stats -->
+        <div class="stats-grid-right">
+          <div class="stat-block">
+            <div class="stat-label">시도</div>
+            <div class="stat-val" id="total-tries">0</div>
+          </div>
+          <div class="stat-block ok-block">
+            <div class="stat-label">정답</div>
+            <div class="stat-val" id="total-correct">0</div>
+          </div>
+          <div class="stat-block fail-block">
+            <div class="stat-label">실패</div>
+            <div class="stat-val" id="total-wrong">0</div>
+          </div>
+          <div class="stat-block">
+            <div class="stat-label">FPS</div>
+            <div class="stat-val" id="fps-value">-</div>
+          </div>
+          <div class="stat-block">
+            <div class="stat-label">손</div>
+            <div class="stat-val" id="hand-count">0</div>
+          </div>
+          <div class="stat-block">
+            <div class="stat-label">얼굴</div>
+            <div class="stat-val" id="face-detected">-</div>
+          </div>
+        </div>
+
+      </div><!-- /right-panel -->
+    </div><!-- /stage -->
+
+    <!-- Debug panel -->
+    <div class="debug-section">
+      <button class="debug-toggle" id="debug-toggle">디버그 패널 열기</button>
+      <div class="debug-panel" id="debug-panel" style="display:none">
+        <div class="debug-metrics">
+          <div class="debug-metric">
+            <div class="dm-label">얼굴 Yaw</div>
+            <div class="dm-value" id="db-yaw">-</div>
+            <div class="yaw-bar-wrap"><div class="yaw-bar-fill" id="db-yaw-bar"></div><div class="yaw-bar-center"></div></div>
+          </div>
+          <div class="debug-metric">
+            <div class="dm-label">얼굴 Pitch</div>
+            <div class="dm-value" id="db-pitch">-</div>
+          </div>
+          <div class="debug-metric">
+            <div class="dm-label">박스 내 포인트 / 임계값</div>
+            <div class="dm-value" id="db-pts">-</div>
+          </div>
+          <div class="debug-metric">
+            <div class="dm-label">최근접 손 거리</div>
+            <div class="dm-value" id="db-dist">-</div>
+          </div>
+          <div class="debug-metric">
+            <div class="dm-label">감지 반경</div>
+            <div class="dm-value" id="db-radius">-</div>
+          </div>
+          <div class="debug-metric">
+            <div class="dm-label">현재 감지 상태</div>
+            <div class="dm-value" id="db-method">-</div>
+          </div>
+          <div class="debug-metric">
+            <div class="dm-label">허리 숙임</div>
+            <div class="dm-value" id="db-bent">-</div>
+          </div>
+          <div class="debug-metric">
+            <div class="dm-label">앉기</div>
+            <div class="dm-value" id="db-sitting">-</div>
+          </div>
+          <div class="debug-metric">
+            <div class="dm-label">Torso/Face</div>
+            <div class="dm-value" id="db-torso">-</div>
+          </div>
+        </div>
+        <div class="debug-log-wrap">
+          <div class="debug-log-header">
+            <span>이벤트 로그</span>
+            <div class="debug-log-actions">
+              <button id="debug-clear">지우기</button>
+              <button id="debug-download">JSON 다운로드</button>
+            </div>
+          </div>
+          <div class="debug-log-list" id="debug-log-list"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="loading-overlay" id="loading-overlay">
+    <div class="loading-spinner"></div>
+    <div class="loading-text">모델 로딩 중...</div>
+    <div class="loading-sub">처음 로드 시 시간이 걸릴 수 있습니다</div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic/holistic.js" crossorigin="anonymous"></script>
+  <script src="app.js?v=6640fb2c"></script>
+</body>
+</html>

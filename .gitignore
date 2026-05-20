@@ -1,0 +1,11 @@
+# Firebase cache
+.firebase/
+
+# Claude Code session
+.claude/
+
+# Screenshots / captures
+capture/
+
+# Node
+node_modules/
