@@ -67,7 +67,34 @@ const condArms         = document.getElementById('cond-arms');
 const condArmsIcon     = document.getElementById('cond-arms-icon');
 const condBalance      = document.getElementById('cond-balance');
 const condBalanceIcon  = document.getElementById('cond-balance-icon');
+const zoomInBtn        = document.getElementById('zoom-in');
+const zoomOutBtn       = document.getElementById('zoom-out');
+const zoomValEl        = document.getElementById('zoom-val');
 let debugVisible = false;
+
+// ── Zoom control ──────────────────────────────────────────────────────────────
+const ZOOM_MIN  = 1.0;   // 1.0x = 카메라 최대 화각 (줄일 수 없음)
+const ZOOM_MAX  = 2.0;
+const ZOOM_STEP = 0.25;
+let zoomLevel   = 1.0;
+
+function applyZoom() {
+  const t = `scaleX(-1) scale(${zoomLevel})`;
+  video.style.transform  = t;
+  canvas.style.transform = t;
+  zoomValEl.textContent  = `${zoomLevel.toFixed(2).replace(/\.?0+$/, '')}x`;
+  zoomOutBtn.disabled = zoomLevel <= ZOOM_MIN;
+  zoomInBtn.disabled  = zoomLevel >= ZOOM_MAX;
+}
+
+zoomInBtn.addEventListener('click', () => {
+  zoomLevel = Math.min(ZOOM_MAX, +(zoomLevel + ZOOM_STEP).toFixed(2));
+  applyZoom();
+});
+zoomOutBtn.addEventListener('click', () => {
+  zoomLevel = Math.max(ZOOM_MIN, +(zoomLevel - ZOOM_STEP).toFixed(2));
+  applyZoom();
+});
 
 // ── Logger ────────────────────────────────────────────────────────────────────
 const Logger = {
