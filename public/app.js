@@ -7,8 +7,10 @@ const ANKLE_DIFF_THRESH = 0.07;  // 발목 y-차이 (한발 서기 판정)
 const KNEE_RAISE_THRESH = 0.04;  // 무릎이 골반보다 이만큼 위면 올린 것
 
 // Game config
-const COUNTDOWN_FROM = 5;
-const TICK_MS        = 1000;
+const COUNTDOWN_FROM   = 5;
+const TICK_MS          = 1000;
+const HOLD_DURATION_MS = 5000;
+const HOLD_SUCCESS_MS  = 4500;
 
 // ── Global state ──────────────────────────────────────────────────────────────
 let lastPoseLandmarks = null;
@@ -21,10 +23,18 @@ let snapCanvas  = null;
 let snapCtx     = null;
 
 // ── App state ─────────────────────────────────────────────────────────────────
-const PHASE = { IDLE:'idle', COUNTDOWN:'countdown', SNAP:'snap', RESULT:'result' };
+const PHASE = { IDLE:'idle', COUNTDOWN:'countdown', HOLD:'hold', RESULT:'result' };
 let phase          = PHASE.IDLE;
 let countdownTimer = null;
 let countdownVal   = COUNTDOWN_FROM;
+
+// Hold phase state
+let holdStartTime  = 0;
+let holdLastTick   = 0;
+let holdArmAccum   = 0;
+let holdLegAccum   = 0;
+let holdBothAccum  = 0;
+let holdEndTimer   = null;
 
 let totalTries = 0, totalCorrect = 0, totalWrong = 0;
 let frameCount = 0, lastFpsTime = performance.now();
@@ -40,10 +50,21 @@ const snapOverlay  = document.getElementById('snap-overlay');
 const flashOverlay = document.getElementById('flash-overlay');
 const stateIdle      = document.getElementById('state-idle');
 const stateCountdown = document.getElementById('state-countdown');
+const stateHold      = document.getElementById('state-hold');
 const stateResult    = document.getElementById('state-result');
+const startOverlay      = document.getElementById('start-overlay');
+const holdProgressWrap  = document.getElementById('hold-progress-wrap');
+const holdArc           = document.getElementById('hold-arc');
+const HOLD_CIRCUMFERENCE = 138.23; // 2 * π * 22
+const holdArmsIcon   = document.getElementById('hold-arms-icon');
+const holdArmsTime   = document.getElementById('hold-arms-time');
+const holdBalIcon    = document.getElementById('hold-balance-icon');
+const holdBalTime    = document.getElementById('hold-balance-time');
+const holdCondArms   = document.getElementById('hold-cond-arms');
+const holdCondBal    = document.getElementById('hold-cond-balance');
 const startBtn    = document.getElementById('start-btn');
 const retryBtn    = document.getElementById('retry-btn');
-const snapPreview = document.getElementById('snap-preview');
+const resultSnapshotLeft = document.getElementById('result-snapshot-left');
 const resultIcon  = document.getElementById('result-icon');
 const resultLabel = document.getElementById('result-label');
 const resultSub   = document.getElementById('result-sub');
@@ -65,8 +86,10 @@ const debugClearBtn    = document.getElementById('debug-clear');
 const debugDownloadBtn = document.getElementById('debug-download');
 const condArms         = document.getElementById('cond-arms');
 const condArmsIcon     = document.getElementById('cond-arms-icon');
+const condArmsTime     = document.getElementById('cond-arms-time');
 const condBalance      = document.getElementById('cond-balance');
 const condBalanceIcon  = document.getElementById('cond-balance-icon');
+const condBalanceTime  = document.getElementById('cond-balance-time');
 const zoomInBtn        = document.getElementById('zoom-in');
 const zoomOutBtn       = document.getElementById('zoom-out');
 const zoomValEl        = document.getElementById('zoom-val');
@@ -251,11 +274,19 @@ function drawSkeleton(sc, pose, W, H, armOk, legOk, mirrorX) {
   sc.restore();
 }
 
+
 // ── Real-time canvas overlay ──────────────────────────────────────────────────
 function drawOverlay(pose, armDet, legDet, W, H) {
   ctx.clearRect(0, 0, W, H);
   if (!pose) return;
   drawSkeleton(ctx, pose, W, H, armDet.spread, legDet.oneFoot, false);
+
+  if (phase === PHASE.HOLD) {
+    const elapsed  = performance.now() - holdStartTime;
+    const progress = Math.min(elapsed / HOLD_DURATION_MS, 1);
+    holdArc.setAttribute('stroke-dashoffset',
+      (HOLD_CIRCUMFERENCE * (1 - progress)).toFixed(3));
+  }
 }
 
 // ── Snapshot capture ──────────────────────────────────────────────────────────
@@ -287,33 +318,6 @@ function captureSnapshot(armDet, legDet, grade, pose, W, H) {
   sc.fillText(grade, 12, 34);
   sc.restore();
 
-  // 조건 레이블
-  sc.save();
-  sc.font        = 'bold 14px system-ui';
-  sc.shadowColor = '#000';
-  sc.shadowBlur  = 6;
-  const badges = [
-    { label: armDet.spread  ? '양손 벌리기 ✓' : '양손 벌리기 ✗', ok: armDet.spread,  y: H - 44 },
-    { label: legDet.oneFoot ? '한발 서기 ✓'   : '한발 서기 ✗',   ok: legDet.oneFoot, y: H - 24 },
-  ];
-  for (const b of badges) {
-    sc.fillStyle = b.ok ? '#22c55e' : '#ef4444';
-    sc.fillText(b.label, 12, b.y);
-  }
-  sc.restore();
-
-  // 디버그 수치
-  sc.save();
-  sc.font        = '12px monospace';
-  sc.fillStyle   = 'rgba(255,255,255,0.85)';
-  sc.shadowColor = '#000';
-  sc.shadowBlur  = 4;
-  const lines = [
-    `팔 비율: ${f(armDet.spanRatio)} (임계 ${ARM_SPREAD_RATIO})  L:${armDet.lRaised?'O':'X'} R:${armDet.rRaised?'O':'X'}`,
-    `발목차: ${f(legDet.ankleDiff)} (임계 ${ANKLE_DIFF_THRESH})  무릎: L${legDet.lKneeUp?'O':'X'} R${legDet.rKneeUp?'O':'X'}`,
-  ];
-  lines.forEach((line, i) => sc.fillText(line, 8, H - 68 - (lines.length - 1 - i) * 17));
-  sc.restore();
 
   return snapCanvas.toDataURL('image/jpeg', 0.90);
 }
@@ -322,6 +326,7 @@ function captureSnapshot(armDet, legDet, grade, pose, W, H) {
 function showPhase(p) {
   stateIdle.style.display      = p === PHASE.IDLE      ? 'flex' : 'none';
   stateCountdown.style.display = p === PHASE.COUNTDOWN ? 'flex' : 'none';
+  stateHold.style.display      = p === PHASE.HOLD      ? 'flex' : 'none';
   stateResult.style.display    = p === PHASE.RESULT    ? 'flex' : 'none';
 }
 
@@ -345,42 +350,55 @@ function startCountdown() {
   countdownTimer = setInterval(() => {
     countdownVal--;
     if (countdownVal > 0) { animateNumber(countdownVal); }
-    else { clearInterval(countdownTimer); doSnap(); }
+    else { clearInterval(countdownTimer); startHold(); }
   }, TICK_MS);
 }
 
-function doSnap() {
-  phase = PHASE.SNAP;
+function startHold() {
+  phase         = PHASE.HOLD;
+  holdStartTime = performance.now();
+  holdLastTick  = holdStartTime;
+  holdArmAccum  = 0;
+  holdLegAccum  = 0;
+  holdBothAccum = 0;
+
   cdOverlay.classList.remove('visible');
+  holdArc.setAttribute('stroke-dashoffset', HOLD_CIRCUMFERENCE);
+  holdProgressWrap.style.display = 'block';
+  showPhase(PHASE.HOLD);
 
-  flashOverlay.classList.remove('flash');
-  void flashOverlay.offsetWidth;
-  flashOverlay.classList.add('flash');
+  // "START!" 오버레이
+  startOverlay.classList.remove('visible');
+  void startOverlay.offsetWidth;
+  startOverlay.classList.add('visible');
+  setTimeout(() => startOverlay.classList.remove('visible'), 1200);
 
-  snapOverlay.classList.remove('visible');
-  void snapOverlay.offsetWidth;
-  snapOverlay.classList.add('visible');
+  Logger.log('INFO', { msg: 'HOLD 시작 — 5초간 자세를 유지하세요!' });
 
-  const armDet = { ...lastArmDet };
-  const legDet = { ...lastLegDet };
+  holdEndTimer = setTimeout(() => finishHold(), HOLD_DURATION_MS);
+}
 
-  const armsSpread = armDet.spread;
-  const oneFoot    = legDet.oneFoot;
-  const grade      = !armsSpread ? 'FAIL' : oneFoot ? 'EXCELLENT' : 'GOOD';
+function finishHold() {
+  clearTimeout(holdEndTimer);
+  holdProgressWrap.style.display = 'none';
+
+  const armSec  = holdArmAccum  / 1000;
+  const legSec  = holdLegAccum  / 1000;
+  const bothSec = holdBothAccum / 1000;
+  const success = holdBothAccum >= HOLD_SUCCESS_MS;
+  const grade   = success ? (holdLegAccum >= HOLD_SUCCESS_MS ? 'EXCELLENT' : 'GOOD') : 'FAIL';
 
   Logger.log('SNAP', {
-    grade, armsSpread, oneFoot,
-    spanRatio: armDet.spanRatio,
-    lRaised:   armDet.lRaised,
-    rRaised:   armDet.rRaised,
-    ankleDiff: legDet.ankleDiff,
-    lKneeUp:   legDet.lKneeUp,
-    rKneeUp:   legDet.rKneeUp,
-    hasPose:   lastPoseLandmarks !== null,
+    grade,
+    armsSpread: holdArmAccum >= HOLD_SUCCESS_MS,
+    oneFoot:    holdLegAccum >= HOLD_SUCCESS_MS,
+    spanRatio:  lastArmDet.spanRatio,
+    ankleDiff:  lastLegDet.ankleDiff,
+    armSec, legSec, bothSec,
   });
 
-  const snapURL = captureSnapshot(armDet, legDet, grade, lastPoseLandmarks, lastImgW, lastImgH);
-  setTimeout(() => showResult({ armsSpread, oneFoot, grade, armDet, legDet }, snapURL), 700);
+  const snapURL = captureSnapshot(lastArmDet, lastLegDet, grade, lastPoseLandmarks, lastImgW, lastImgH);
+  showResult({ armSec, legSec, bothSec, grade }, snapURL);
 }
 
 function showResult(det, snapURL) {
@@ -388,32 +406,43 @@ function showResult(det, snapURL) {
   totalTries++;
   totalTriesEl.textContent = totalTries;
 
-  const { grade, armsSpread, oneFoot } = det;
-  const ok = grade !== 'FAIL';
+  const { grade, armSec, legSec } = det;
+  const armOk = armSec >= HOLD_SUCCESS_MS / 1000;
+  const legOk = legSec >= HOLD_SUCCESS_MS / 1000;
+  const ok    = grade !== 'FAIL';
+
   if (ok) { totalCorrect++; totalCorrectEl.textContent = totalCorrect; }
   else    { totalWrong++;   totalWrongEl.textContent   = totalWrong; }
 
-  snapPreview.src       = snapURL;
+  resultSnapshotLeft.src          = snapURL;
+  resultSnapshotLeft.style.display = 'block';
   stateResult.className = `panel-card ${grade.toLowerCase()}`;
 
   resultIcon.textContent  = grade === 'EXCELLENT' ? '🎉' : grade === 'GOOD' ? '👍' : '😅';
   resultLabel.className   = `result-label ${grade.toLowerCase()}`;
-  resultLabel.textContent = grade;
+  resultLabel.textContent = grade === 'EXCELLENT' ? 'EXCELLENT!' : grade === 'GOOD' ? 'GOOD!' : 'FAIL';
 
+  // 부족한 부분 메시지
   if (grade === 'EXCELLENT') {
-    resultSub.textContent = '완벽해요! 팔 벌리고 한발로 서다니!';
+    resultSub.textContent = '완벽해요! 팔 벌리고 한발로 5초 유지!';
   } else if (grade === 'GOOD') {
-    resultSub.textContent = '잘했어요! 한발로 서면 EXCELLENT!';
+    resultSub.textContent = `한발 서기가 아직 부족해요 (${legSec.toFixed(1)}s / 4.5s). 무릎을 더 들어보세요!`;
   } else {
-    resultSub.textContent = '양손을 좌우로 활짝 벌려보세요!';
+    if (!armOk && !legOk) {
+      resultSub.textContent = `양손 벌리기(${armSec.toFixed(1)}s)와 한발 서기(${legSec.toFixed(1)}s) 모두 부족해요!`;
+    } else {
+      resultSub.textContent = `양손 벌리기가 부족해요 (${armSec.toFixed(1)}s / 4.5s). 손을 어깨 높이까지 벌려보세요!`;
+    }
   }
 
-  condArms.className        = `cond-item ${armsSpread ? 'ok' : 'fail'}`;
-  condArmsIcon.textContent  = armsSpread ? '✓' : '✗';
-  condBalance.className       = `cond-item ${oneFoot ? 'ok' : 'fail'}`;
-  condBalanceIcon.textContent = oneFoot ? '✓' : '✗';
+  condArms.className        = `cond-item ${armOk ? 'ok' : 'fail'}`;
+  condArmsIcon.textContent  = armOk ? '✓' : '✗';
+  condArmsTime.textContent  = `${armSec.toFixed(1)}s / 5s`;
+  condBalance.className       = `cond-item ${legOk ? 'ok' : 'fail'}`;
+  condBalanceIcon.textContent = legOk ? '✓' : '✗';
+  condBalanceTime.textContent = `${legSec.toFixed(1)}s / 5s`;
 
-  Logger.log(ok ? 'CORRECT' : 'WRONG', { grade, armsSpread, oneFoot });
+  Logger.log(ok ? 'CORRECT' : 'WRONG', { grade, armOk, legOk, armSec, legSec });
 
   showPhase(PHASE.RESULT);
 }
@@ -421,8 +450,13 @@ function showResult(det, snapURL) {
 function reset() {
   phase = PHASE.IDLE;
   clearInterval(countdownTimer);
+  clearTimeout(holdEndTimer);
   cdOverlay.classList.remove('visible');
   snapOverlay.classList.remove('visible');
+  startOverlay.classList.remove('visible');
+  resultSnapshotLeft.style.display  = 'none';
+  holdProgressWrap.style.display    = 'none';
+  holdArc.setAttribute('stroke-dashoffset', HOLD_CIRCUMFERENCE);
   showPhase(PHASE.IDLE);
 }
 
@@ -441,6 +475,24 @@ function onResults(results) {
   if (phase === PHASE.IDLE) {
     ctx.clearRect(0, 0, W, H);
     return;
+  }
+
+  // HOLD 중 자세 유지 시간 누적
+  if (phase === PHASE.HOLD) {
+    const now   = performance.now();
+    const delta = now - holdLastTick;
+    holdLastTick = now;
+    if (lastArmDet.spread)  holdArmAccum  += delta;
+    if (lastLegDet.oneFoot) holdLegAccum  += delta;
+    if (lastArmDet.spread && lastLegDet.oneFoot) holdBothAccum += delta;
+
+    // 우상단 실시간 패널 업데이트
+    holdArmsIcon.textContent = lastArmDet.spread  ? '✓' : '✗';
+    holdBalIcon.textContent  = lastLegDet.oneFoot ? '✓' : '✗';
+    holdArmsTime.textContent = `${(holdArmAccum / 1000).toFixed(1)}s`;
+    holdBalTime.textContent  = `${(holdLegAccum / 1000).toFixed(1)}s`;
+    holdCondArms.className   = `cond-item ${lastArmDet.spread  ? 'ok' : 'fail'}`;
+    holdCondBal.className    = `cond-item ${lastLegDet.oneFoot ? 'ok' : 'fail'}`;
   }
 
   const hasPose = !!(results.poseLandmarks?.length);
